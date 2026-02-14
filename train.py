@@ -28,7 +28,7 @@ from tensorflow.keras.utils import to_categorical
 # =============================
 # 2️⃣ PARAMETERS
 # =============================
-ROOT_PATH = "speech-emotion-recognition-en"
+ROOT_PATH = "Data"
 
 SAMPLE_RATE = 22050
 DURATION = 3
