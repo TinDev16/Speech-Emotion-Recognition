@@ -1,43 +1,31 @@
 # =====================================================
-# SPEECH EMOTION RECOGNITION - PREDICT FILE
+# SPEECH EMOTION RECOGNITION - PREDICT (FIXED)
 # =====================================================
 
+import sys
 import numpy as np
 import librosa
+import warnings
+warnings.filterwarnings("ignore")
+
 import joblib
 from tensorflow.keras.models import load_model
 
-# =====================
-# PATHS
-# =====================
-MODEL_PATH = "ser_final.keras"
-LABEL_PATH = "labels.npy"
-SCALER_PATH = "scaler.save"
-
-TEST_FILE = "test.wav"   # 🔴 đổi thành file m muốn test
-
-# =====================
-# AUDIO PARAMS (PHẢI GIỐNG TRAIN)
-# =====================
-SR = 22050
+# =============================
+# PARAMETERS (PHẢI GIỐNG TRAIN)
+# =============================
+SAMPLE_RATE = 22050
 DURATION = 3
 OFFSET = 0.5
 MAX_LEN = 130
 
-# =====================
-# LOAD MODEL & TOOLS
-# =====================
-model = load_model(MODEL_PATH)
-labels = np.load(LABEL_PATH, allow_pickle=True)
-scaler = joblib.load(SCALER_PATH)
-
-# =====================
+# =============================
 # FEATURE EXTRACTION
-# =====================
+# =============================
 def extract_features(path):
     y, sr = librosa.load(
         path,
-        sr=SR,
+        sr=SAMPLE_RATE,
         duration=DURATION,
         offset=OFFSET
     )
@@ -46,42 +34,54 @@ def extract_features(path):
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40)
 
-    feat = np.vstack([mfcc, chroma, mel]).T  # (time, features)
+    features = np.vstack([mfcc, chroma, mel]).T
 
-    if feat.shape[0] < MAX_LEN:
-        feat = np.pad(
-            feat,
-            ((0, MAX_LEN - feat.shape[0]), (0, 0))
+    if features.shape[0] < MAX_LEN:
+        features = np.pad(
+            features,
+            ((0, MAX_LEN - features.shape[0]), (0, 0))
         )
     else:
-        feat = feat[:MAX_LEN]
+        features = features[:MAX_LEN, :]
 
-    return feat
+    return features
 
-# =====================
-# PREDICT
-# =====================
-def predict_emotion(path):
-    x = extract_features(path)
 
-    # scale giống lúc train
-    x = scaler.transform(x.reshape(1, -1)).reshape(1, MAX_LEN, -1)
-
-    pred = model.predict(x, verbose=0)[0]
-
-    idx = np.argmax(pred)
-    emotion = labels[idx]
-
-    return emotion, pred
-
-# =====================
-# RUN
-# =====================
+# =============================
+# MAIN
+# =============================
 if __name__ == "__main__":
-    emotion, probs = predict_emotion(TEST_FILE)
 
-    print("🎧 File:", TEST_FILE)
-    print("🎯 Emotion:", emotion)
-    print("\n📊 Probabilities:")
-    for lbl, p in zip(labels, probs):
-        print(f"{lbl:10s}: {p:.3f}")
+    if len(sys.argv) < 2:
+        print("❌ Usage: python predict.py path_to_audio.wav")
+        sys.exit()
+
+    audio_path = sys.argv[1]
+
+    print("🔄 Loading model, labels & scaler...")
+    model = load_model("ser_bilstm_improved.h5")
+    labels = np.load("labels.npy", allow_pickle=True)
+    scaler = joblib.load("scaler.save")   # ✅ LOAD SCALER ĐÃ TRAIN
+
+    # Extract features
+    features = extract_features(audio_path)
+    X = np.expand_dims(features, axis=0)
+
+    # ✅ CHỈ TRANSFORM – KHÔNG FIT
+    X = scaler.transform(
+        X.reshape(1, -1)
+    ).reshape(X.shape)
+
+    # Predict
+    preds = model.predict(X, verbose=0)
+    pred_index = np.argmax(preds)
+    pred_label = labels[pred_index]
+    confidence = preds[0][pred_index] * 100
+
+    print("\n🎤 Audio:", audio_path)
+    print("🎯 Emotion:", pred_label)
+    print(f"📊 Confidence: {confidence:.2f}%")
+
+    print("\n🔢 Full probabilities:")
+    for i, label in enumerate(labels):
+        print(f"{label:10s}: {preds[0][i]*100:.2f}%")

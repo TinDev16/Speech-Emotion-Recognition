@@ -1,13 +1,18 @@
 # =====================================================
-# SPEECH EMOTION RECOGNITION – MULTI DATASET (8 LABELS)
+# SPEECH EMOTION RECOGNITION - BiLSTM (8 LABELS)
+# One-file version - FIXED SCALER
 # =====================================================
 
+# =============================
+# 1️⃣ IMPORT & CONFIG
+# =============================
 import os
 import numpy as np
 import librosa
-import joblib
 import warnings
 warnings.filterwarnings("ignore")
+
+import joblib   # ✅ THÊM
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -16,175 +21,238 @@ from sklearn.utils.class_weight import compute_class_weight
 
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Bidirectional
-from tensorflow.keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.utils import to_categorical
 
-# =====================
-# PATHS
-# =====================
-ROOT = "data"
-TRAINING = os.path.join(ROOT, "training")
-VALIDATION = os.path.join(ROOT, "validation")
-EMODB = os.path.join(ROOT, "emodb", "wav")
-CUSTOM = [os.path.join(ROOT, "train-custom")]
 
-# =====================
-# AUDIO PARAMS
-# =====================
-SR = 22050
+# =============================
+# 2️⃣ PARAMETERS
+# =============================
+ROOT_PATH = "speech-emotion-recognition-en"
+
+SAMPLE_RATE = 22050
 DURATION = 3
 OFFSET = 0.5
 MAX_LEN = 130
 
-# =====================
-# EMO MAP
-# =====================
-VALID_LABELS = [
-    "angry", "calm", "disgust", "fear",
-    "happy", "neutral", "sad", "surprise"
-]
 
-emodb_map = {
-    "W": "angry",
-    "E": "disgust",
-    "A": "fear",
-    "F": "happy",
-    "T": "sad",
-    "N": "neutral"
+# =============================
+# 3️⃣ EMOTION MAP (8 LABELS)
+# =============================
+ravdess_map = {
+    "01": "neutral",
+    "02": "calm",
+    "03": "happy",
+    "04": "sad",
+    "05": "angry",
+    "06": "fear",
+    "07": "disgust",
+    "08": "surprise"
 }
 
-# =====================
-# FEATURE EXTRACTION
-# =====================
+crema_map = {
+    "ANG": "angry",
+    "HAP": "happy",
+    "SAD": "sad",
+    "FEA": "fear",
+    "DIS": "disgust",
+    "NEU": "neutral"
+}
+
+savee_map = {
+    "a": "angry",
+    "h": "happy",
+    "s": "sad",
+    "f": "fear",
+    "d": "disgust",
+    "n": "neutral"
+}
+
+
+# =============================
+# 4️⃣ FEATURE EXTRACTION
+# =============================
 def extract_features(path):
-    y, sr = librosa.load(path, sr=SR, duration=DURATION, offset=OFFSET)
+    y, sr = librosa.load(
+        path,
+        sr=SAMPLE_RATE,
+        duration=DURATION,
+        offset=OFFSET
+    )
+
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40)
-    feat = np.vstack([mfcc, chroma, mel]).T
 
-    if feat.shape[0] < MAX_LEN:
-        feat = np.pad(feat, ((0, MAX_LEN - feat.shape[0]), (0, 0)))
+    features = np.vstack([mfcc, chroma, mel]).T  # (time, features)
+
+    if features.shape[0] < MAX_LEN:
+        features = np.pad(
+            features,
+            ((0, MAX_LEN - features.shape[0]), (0, 0))
+        )
     else:
-        feat = feat[:MAX_LEN]
-    return feat
+        features = features[:MAX_LEN, :]
 
-# =====================
-# LOAD DATA
-# =====================
-X, y = [], []
+    return features
 
-def load_folder(folder):
-    for root, _, files in os.walk(folder):
-        for f in files:
-            if not f.endswith(".wav"):
+
+# =============================
+# 5️⃣ MAIN
+# =============================
+if __name__ == "__main__":
+
+    print("📂 Loading dataset...")
+    X, y = [], []
+
+    for root, _, files in os.walk(ROOT_PATH):
+        for file in files:
+            if not file.lower().endswith(".wav"):
                 continue
-            label = None
 
-            # RAVDESS (label text)
-            if "_" in f and f.split("_")[-1].replace(".wav", "") in VALID_LABELS:
-                label = f.split("_")[-1].replace(".wav", "")
+            path = os.path.join(root, file)
+            emotion = None
+            root_lower = root.lower()
 
-            if label not in VALID_LABELS:
+            if "ravdess" in root_lower:
+                parts = file.split("-")
+                if len(parts) > 2:
+                    emotion = ravdess_map.get(parts[2])
+
+            elif "crema" in root_lower:
+                emotion = crema_map.get(file.split("_")[2])
+
+            elif "savee" in root_lower:
+                emotion = savee_map.get(
+                    file.split("_")[1][0].lower()
+                )
+
+            elif "tess" in root_lower:
+                folder = os.path.basename(root).lower()
+                emotion = folder.split("_")[1]
+                if emotion == "ps":
+                    emotion = "surprise"
+
+            if emotion is None:
                 continue
 
             try:
-                X.append(extract_features(os.path.join(root, f)))
-                y.append(label)
+                X.append(extract_features(path))
+                y.append(emotion)
             except:
                 pass
 
-# training + validation
-load_folder(TRAINING)
-load_folder(VALIDATION)
+    X = np.array(X)
+    y = np.array(y)
 
-# custom
-for c in CUSTOM:
-    load_folder(c)
+    print("✅ Data loaded")
+    print("X shape:", X.shape)
+    print("Labels:", np.unique(y))
 
-# EMO-DB
-for f in os.listdir(EMODB):
-    if not f.endswith(".wav"):
-        continue
-    code = f[-6].upper()
-    label = emodb_map.get(code)
-    if label:
-        X.append(extract_features(os.path.join(EMODB, f)))
-        y.append(label)
 
-X = np.array(X)
-y = np.array(y)
+    # =============================
+    # 6️⃣ ENCODE + NORMALIZE
+    # =============================
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y)
+    y_cat = to_categorical(y_enc)
 
-print("X:", X.shape)
-print("Labels:", np.unique(y))
+    scaler = StandardScaler()
+    X = scaler.fit_transform(
+        X.reshape(len(X), -1)
+    ).reshape(X.shape)
 
-# =====================
-# ENCODE + SCALE
-# =====================
-le = LabelEncoder()
-y_enc = le.fit_transform(y)
-y_cat = to_categorical(y_enc)
+    # ✅ LƯU SCALER
+    joblib.dump(scaler, "scaler.save")
+    print("💾 Scaler saved: scaler.save")
 
-scaler = StandardScaler()
-X = scaler.fit_transform(X.reshape(len(X), -1)).reshape(X.shape)
 
-joblib.dump(scaler, "scaler.save")
+    # =============================
+    # 7️⃣ SPLIT + CLASS WEIGHT
+    # =============================
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y_cat,
+        test_size=0.2,
+        random_state=42,
+        stratify=y_enc
+    )
 
-# =====================
-# SPLIT
-# =====================
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y_cat, test_size=0.2, stratify=y_enc, random_state=42
-)
+    class_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=np.unique(y_enc),
+        y=y_enc
+    )
+    class_weights = dict(enumerate(class_weights))
 
-class_weights = compute_class_weight(
-    class_weight="balanced",
-    classes=np.unique(y_enc),
-    y=y_enc
-)
-class_weights = dict(enumerate(class_weights))
 
-# =====================
-# MODEL
-# =====================
-model = Sequential([
-    Bidirectional(LSTM(128, return_sequences=True),
-                  input_shape=X_train.shape[1:]),
-    Dropout(0.3),
-    Bidirectional(LSTM(64)),
-    Dropout(0.3),
-    Dense(64, activation="relu"),
-    Dropout(0.3),
-    Dense(len(le.classes_), activation="softmax")
-])
+    # =============================
+    # 8️⃣ BiLSTM MODEL
+    # =============================
+    model = Sequential([
+        Bidirectional(
+            LSTM(128, return_sequences=True),
+            input_shape=X_train.shape[1:]
+        ),
+        Dropout(0.3),
 
-model.compile(
-    optimizer="adam",
-    loss="categorical_crossentropy",
-    metrics=["accuracy"]
-)
+        Bidirectional(LSTM(64)),
+        Dropout(0.3),
 
-# =====================
-# TRAIN
-# =====================
-model.fit(
-    X_train, y_train,
-    validation_data=(X_test, y_test),
-    epochs=50,
-    batch_size=32,
-    class_weight=class_weights,
-    callbacks=[ReduceLROnPlateau(patience=3, factor=0.5)]
-)
+        Dense(64, activation="relu"),
+        Dropout(0.3),
 
-# =====================
-# EVAL
-# =====================
-pred = np.argmax(model.predict(X_test), axis=1)
-true = np.argmax(y_test, axis=1)
+        Dense(y_cat.shape[1], activation="softmax")
+    ])
 
-print(classification_report(true, pred, target_names=le.classes_))
-print(confusion_matrix(true, pred))
+    model.compile(
+        optimizer="adam",
+        loss="categorical_crossentropy",
+        metrics=["accuracy"]
+    )
 
-model.save("ser_final.keras")
-np.save("labels.npy", le.classes_)
-print("✅ DONE")
+    model.summary()
+
+
+    # =============================
+    # 9️⃣ TRAIN
+    # =============================
+    callbacks = [
+        EarlyStopping(patience=6, restore_best_weights=True),
+        ReduceLROnPlateau(patience=3, factor=0.5)
+    ]
+
+    model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_test, y_test),
+        epochs=50,
+        batch_size=32,
+        callbacks=callbacks,
+        class_weight=class_weights
+    )
+
+
+    # =============================
+    # 🔟 EVALUATION
+    # =============================
+    y_pred = np.argmax(model.predict(X_test), axis=1)
+    y_true = np.argmax(y_test, axis=1)
+
+    print("\n📊 Classification Report")
+    print(classification_report(
+        y_true, y_pred, target_names=le.classes_
+    ))
+
+    print("📉 Confusion Matrix")
+    print(confusion_matrix(y_true, y_pred))
+
+
+    # =============================
+    # 1️⃣1️⃣ SAVE MODEL
+    # =============================
+    model.save("ser_bilstm_improved.h5")
+    np.save("labels.npy", le.classes_)
+
+    print("\n✅ TRAINING DONE")
+    print("🎯 Labels:", le.classes_)
