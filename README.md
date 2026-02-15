@@ -7,7 +7,7 @@
 
 ## Requirements
 - **Python 3.6+**
-- 
+
 ### Python Packages
 - **librosa>=0.10.0**
 - **numpy>=1.23**
