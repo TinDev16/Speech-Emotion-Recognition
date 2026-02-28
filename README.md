@@ -42,7 +42,7 @@ This repository used 4 datasets (including this repo's custom dataset) which are
 - **CREMA**
 
 ### Emotions available
-There are 9 emotions available: : 
+There are 8 emotions available: 
 - 01: Neutral
 -	02: Calm
 -	03: Happy
