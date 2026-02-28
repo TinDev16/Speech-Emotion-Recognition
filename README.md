@@ -43,11 +43,11 @@ This repository used 4 datasets (including this repo's custom dataset) which are
 
 ### Emotions available
 There are 9 emotions available: : 
-o 01: Neutral
-o	02: Calm
-o	03: Happy
-o	04: Sad
-o	05: Angry
-o	06: Fear
-o	07: Disgust
-o	08: Surprise
+- 01: Neutral
+-	02: Calm
+-	03: Happy
+-	04: Sad
+-	05: Angry
+-	06: Fear
+-	07: Disgust
+-	08: Surprise
