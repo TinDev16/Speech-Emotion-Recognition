@@ -1,258 +1,308 @@
 # =====================================================
-# SPEECH EMOTION RECOGNITION - BiLSTM (8 LABELS)
-# One-file version - FIXED SCALER
+# SER FINAL - CNN2D + BiLSTM + ATTENTION + MIXUP
 # =====================================================
 
-# =============================
-# 1️⃣ IMPORT & CONFIG
-# =============================
 import os
 import numpy as np
 import librosa
+import random
 import warnings
 warnings.filterwarnings("ignore")
 
-import joblib   # ✅ THÊM
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.utils.class_weight import compute_class_weight
 
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, LSTM, Bidirectional
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import *
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.optimizers import Adam
 
 
 # =============================
-# 2️⃣ PARAMETERS
+# CONFIG
 # =============================
 ROOT_PATH = "Data"
-
 SAMPLE_RATE = 22050
-DURATION = 3
+DURATION = 4
 OFFSET = 0.5
 MAX_LEN = 130
 
+N_SPLITS = 5
+BATCH_SIZE = 32
+
+VALID_EMOTIONS = ["angry","happy","sad","fear","disgust","neutral"]
+
 
 # =============================
-# 3️⃣ EMOTION MAP (8 LABELS)
+# LABEL MAP
 # =============================
 ravdess_map = {
-    "01": "neutral",
-    "02": "calm",
-    "03": "happy",
-    "04": "sad",
-    "05": "angry",
-    "06": "fear",
-    "07": "disgust",
-    "08": "surprise"
+    "01": "neutral","03": "happy","04": "sad",
+    "05": "angry","06": "fear","07": "disgust"
 }
 
 crema_map = {
-    "ANG": "angry",
-    "HAP": "happy",
-    "SAD": "sad",
-    "FEA": "fear",
-    "DIS": "disgust",
-    "NEU": "neutral"
+    "ANG": "angry","HAP": "happy","SAD": "sad",
+    "FEA": "fear","DIS": "disgust","NEU": "neutral"
 }
 
 savee_map = {
-    "a": "angry",
-    "h": "happy",
-    "s": "sad",
-    "f": "fear",
-    "d": "disgust",
-    "n": "neutral"
+    "a": "angry","h": "happy","s": "sad",
+    "f": "fear","d": "disgust","n": "neutral"
 }
 
 
 # =============================
-# 4️⃣ FEATURE EXTRACTION
+# GET LABEL
 # =============================
-def extract_features(path):
-    y, sr = librosa.load(
-        path,
-        sr=SAMPLE_RATE,
-        duration=DURATION,
-        offset=OFFSET
-    )
+def get_emotion(path, file):
+    p = path.lower()
 
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40)
+    if "ravdess" in p:
+        return ravdess_map.get(file.split("-")[2])
 
-    features = np.vstack([mfcc, chroma, mel]).T  # (time, features)
+    elif "crema" in p:
+        return crema_map.get(file.split("_")[2])
 
-    if features.shape[0] < MAX_LEN:
-        features = np.pad(
-            features,
-            ((0, MAX_LEN - features.shape[0]), (0, 0))
-        )
+    elif "savee" in p:
+        return savee_map.get(file.split("_")[1][0])
+
+    elif "tess" in p:
+        emotion = os.path.basename(path).split("_")[1]
+        if emotion == "ps":
+            emotion = "happy"
+        return emotion
+
+    return None
+
+
+# =============================
+# AUGMENT
+# =============================
+def add_noise(y):
+    noise = np.random.randn(len(y))
+    return y + 0.005 * noise
+
+
+# =============================
+# FEATURE
+# =============================
+def extract_features(path, augment=False):
+    try:
+        y, sr = librosa.load(path, sr=SAMPLE_RATE,
+                             duration=DURATION, offset=OFFSET)
+    except:
+        return None
+
+    if augment:
+        y = add_noise(y)
+
+    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
+    mel = librosa.power_to_db(mel)
+
+    if mel.shape[1] < MAX_LEN:
+        mel = np.pad(mel, ((0,0),(0, MAX_LEN-mel.shape[1])))
     else:
-        features = features[:MAX_LEN, :]
+        mel = mel[:, :MAX_LEN]
 
-    return features
+    return mel.T   # (time, freq)
 
 
 # =============================
-# 5️⃣ MAIN
+# LOAD DATA
 # =============================
-if __name__ == "__main__":
+X, y = [], []
 
-    print("📂 Loading dataset...")
-    X, y = [], []
+for root, _, files in os.walk(ROOT_PATH):
+    for file in files:
+        if not file.endswith(".wav"):
+            continue
 
-    for root, _, files in os.walk(ROOT_PATH):
-        for file in files:
-            if not file.lower().endswith(".wav"):
-                continue
+        path = os.path.join(root, file)
 
-            path = os.path.join(root, file)
-            emotion = None
-            root_lower = root.lower()
+        emotion = get_emotion(root, file)
+        if emotion is None:
+            continue
 
-            if "ravdess" in root_lower:
-                parts = file.split("-")
-                if len(parts) > 2:
-                    emotion = ravdess_map.get(parts[2])
+        emotion = emotion.lower()
+        if emotion not in VALID_EMOTIONS:
+            continue
 
-            elif "crema" in root_lower:
-                emotion = crema_map.get(file.split("_")[2])
+        feat = extract_features(path)
+        if feat is None:
+            continue
 
-            elif "savee" in root_lower:
-                emotion = savee_map.get(
-                    file.split("_")[1][0].lower()
-                )
+        X.append(feat)
+        y.append(emotion)
 
-            elif "tess" in root_lower:
-                folder = os.path.basename(root).lower()
-                emotion = folder.split("_")[1]
-                if emotion == "ps":
-                    emotion = "surprise"
-
-            if emotion is None:
-                continue
-
-            try:
-                X.append(extract_features(path))
-                y.append(emotion)
-            except:
-                pass
-
-    X = np.array(X)
-    y = np.array(y)
-
-    print("✅ Data loaded")
-    print("X shape:", X.shape)
-    print("Labels:", np.unique(y))
+        # augment
+        aug = extract_features(path, augment=True)
+        if aug is not None:
+            X.append(aug)
+            y.append(emotion)
 
 
-    # =============================
-    # 6️⃣ ENCODE + NORMALIZE
-    # =============================
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
-    y_cat = to_categorical(y_enc)
+X = np.array(X)
+y = np.array(y)
 
-    scaler = StandardScaler()
-    X = scaler.fit_transform(
-        X.reshape(len(X), -1)
-    ).reshape(X.shape)
-
-    # ✅ LƯU SCALER
-    joblib.dump(scaler, "scaler.save")
-    print("💾 Scaler saved: scaler.save")
+print("Data:", X.shape)
+print("Labels:", np.unique(y))
 
 
-    # =============================
-    # 7️⃣ SPLIT + CLASS WEIGHT
-    # =============================
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y_cat,
-        test_size=0.2,
-        random_state=42,
-        stratify=y_enc
-    )
-
-    class_weights = compute_class_weight(
-        class_weight="balanced",
-        classes=np.unique(y_enc),
-        y=y_enc
-    )
-    class_weights = dict(enumerate(class_weights))
+# =============================
+# ENCODE
+# =============================
+le = LabelEncoder()
+y_enc = le.fit_transform(y)
+y_cat = to_categorical(y_enc)
 
 
-    # =============================
-    # 8️⃣ BiLSTM MODEL
-    # =============================
-    model = Sequential([
-        Bidirectional(
-            LSTM(128, return_sequences=True),
-            input_shape=X_train.shape[1:]
-        ),
-        Dropout(0.3),
+# =============================
+# MIXUP
+# =============================
+def mixup(X, y, alpha=0.2):
+    lam = np.random.beta(alpha, alpha)
+    index = np.random.permutation(len(X))
 
-        Bidirectional(LSTM(64)),
-        Dropout(0.3),
+    X_mix = lam * X + (1 - lam) * X[index]
+    y_mix = lam * y + (1 - lam) * y[index]
 
-        Dense(64, activation="relu"),
-        Dropout(0.3),
+    return X_mix, y_mix
 
-        Dense(y_cat.shape[1], activation="softmax")
-    ])
+
+def data_generator(X, y, batch_size):
+    while True:
+        idx = np.random.permutation(len(X))
+        X = X[idx]
+        y = y[idx]
+
+        for i in range(0, len(X), batch_size):
+            X_batch = X[i:i+batch_size]
+            y_batch = y[i:i+batch_size]
+
+            if np.random.rand() < 0.7:
+                X_batch, y_batch = mixup(X_batch, y_batch)
+
+            yield X_batch, y_batch
+
+
+# =============================
+# MODEL
+# =============================
+def build_model(input_shape, n_classes):
+    inp = Input(shape=input_shape)
+
+    x = Conv2D(32, (3,3), activation='relu')(inp)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2,2))(x)
+
+    x = Conv2D(64, (3,3), activation='relu')(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2,2))(x)
+
+    x = Conv2D(128, (3,3), activation='relu')(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2,2))(x)
+
+    x = Reshape((-1, x.shape[-1]))(x)
+
+    x = Bidirectional(LSTM(128, return_sequences=True))(x)
+
+    # ATTENTION
+    att = Dense(1, activation='tanh')(x)
+    att = Flatten()(att)
+    att = Activation('softmax')(att)
+    att = RepeatVector(x.shape[-1])(att)
+    att = Permute([2,1])(att)
+
+    x = Multiply()([x, att])
+    x = Lambda(lambda z: tf.reduce_sum(z, axis=1))(x)
+
+    x = Dense(128, activation='relu')(x)
+    x = Dropout(0.5)(x)
+
+    out = Dense(n_classes, activation='softmax')(x)
+
+    model = Model(inp, out)
 
     model.compile(
-        optimizer="adam",
-        loss="categorical_crossentropy",
+        optimizer=Adam(1e-4),
+        loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.1),
         metrics=["accuracy"]
     )
 
-    model.summary()
+    return model
 
 
-    # =============================
-    # 9️⃣ TRAIN
-    # =============================
+# =============================
+# TRAIN
+# =============================
+kf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=42)
+
+all_preds, all_true = [], []
+
+for fold, (tr, val) in enumerate(kf.split(X, y_enc), 1):
+    print(f"\nOLD {fold}")
+
+    X_train, X_val = X[tr], X[val]
+    y_train, y_val = y_cat[tr], y_cat[val]
+
+    X_train = X_train[..., np.newaxis]
+    X_val = X_val[..., np.newaxis]
+
+    model = build_model(X_train.shape[1:], y_cat.shape[1])
+
     callbacks = [
-        EarlyStopping(patience=6, restore_best_weights=True),
-        ReduceLROnPlateau(patience=3, factor=0.5)
+        EarlyStopping(patience=5, restore_best_weights=True),
+        ReduceLROnPlateau(patience=2)
     ]
 
+    train_gen = data_generator(X_train, y_train, BATCH_SIZE)
+
     model.fit(
-        X_train,
-        y_train,
-        validation_data=(X_test, y_test),
-        epochs=50,
-        batch_size=32,
+        train_gen,
+        steps_per_epoch=len(X_train)//BATCH_SIZE,
+        validation_data=(X_val, y_val),
+        epochs=40,
         callbacks=callbacks,
-        class_weight=class_weights
+        verbose=1
     )
 
+    pred = np.argmax(model.predict(X_val), axis=1)
+    true = np.argmax(y_val, axis=1)
 
-    # =============================
-    # 🔟 EVALUATION
-    # =============================
-    y_pred = np.argmax(model.predict(X_test), axis=1)
-    y_true = np.argmax(y_test, axis=1)
-
-    print("\n📊 Classification Report")
-    print(classification_report(
-        y_true, y_pred, target_names=le.classes_
-    ))
-
-    print("📉 Confusion Matrix")
-    print(confusion_matrix(y_true, y_pred))
+    all_preds.extend(pred)
+    all_true.extend(true)
 
 
-    # =============================
-    # 1️⃣1️⃣ SAVE MODEL
-    # =============================
-    model.save("ser_bilstm_improved.h5")
-    np.save("labels.npy", le.classes_)
+# =============================
+# REPORT
+# =============================
+print("\nFINAL REPORT")
+print(classification_report(all_true, all_preds, target_names=le.classes_))
 
-    print("\n✅ TRAINING DONE")
-    print("🎯 Labels:", le.classes_)
+
+cm = confusion_matrix(all_true, all_preds)
+
+plt.figure(figsize=(8,6))
+sns.heatmap(cm, annot=True, fmt="d",
+            xticklabels=le.classes_,
+            yticklabels=le.classes_)
+
+plt.title("Confusion Matrix")
+plt.show()
+
+
+# =============================
+# SAVE
+# =============================
+model.save("ser_best.keras")
+np.save("labels.npy", le.classes_)
+
+print("DONE")

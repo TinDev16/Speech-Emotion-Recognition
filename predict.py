@@ -1,87 +1,47 @@
-# =====================================================
-# SPEECH EMOTION RECOGNITION - PREDICT (FIXED)
-# =====================================================
-
 import sys
 import numpy as np
 import librosa
 import warnings
 warnings.filterwarnings("ignore")
 
-import joblib
 from tensorflow.keras.models import load_model
 
-# =============================
-# PARAMETERS (PHẢI GIỐNG TRAIN)
-# =============================
+
 SAMPLE_RATE = 22050
-DURATION = 3
+DURATION = 4
 OFFSET = 0.5
 MAX_LEN = 130
 
-# =============================
-# FEATURE EXTRACTION
-# =============================
+
 def extract_features(path):
-    y, sr = librosa.load(
-        path,
-        sr=SAMPLE_RATE,
-        duration=DURATION,
-        offset=OFFSET
-    )
+    y, sr = librosa.load(path, sr=SAMPLE_RATE,
+                         duration=DURATION, offset=OFFSET)
 
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=40)
+    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
+    mel = librosa.power_to_db(mel)
 
-    features = np.vstack([mfcc, chroma, mel]).T
-
-    if features.shape[0] < MAX_LEN:
-        features = np.pad(
-            features,
-            ((0, MAX_LEN - features.shape[0]), (0, 0))
-        )
+    if mel.shape[1] < MAX_LEN:
+        mel = np.pad(mel, ((0,0),(0, MAX_LEN-mel.shape[1])))
     else:
-        features = features[:MAX_LEN, :]
+        mel = mel[:, :MAX_LEN]
 
-    return features
+    return mel.T  # (time, 128)
 
 
-# =============================
-# MAIN
-# =============================
 if __name__ == "__main__":
-
-    if len(sys.argv) < 2:
-        print("❌ Usage: python predict.py path_to_audio.wav")
-        sys.exit()
 
     audio_path = sys.argv[1]
 
-    print("🔄 Loading model, labels & scaler...")
-    model = load_model("ser_bilstm_improved.h5")
+    model = load_model("ser_best.keras")
     labels = np.load("labels.npy", allow_pickle=True)
-    scaler = joblib.load("scaler.save")   # ✅ LOAD SCALER ĐÃ TRAIN
 
-    # Extract features
-    features = extract_features(audio_path)
-    X = np.expand_dims(features, axis=0)
+    feat = extract_features(audio_path)
 
-    # ✅ CHỈ TRANSFORM – KHÔNG FIT
-    X = scaler.transform(
-        X.reshape(1, -1)
-    ).reshape(X.shape)
+    X = np.expand_dims(feat, axis=0)
+    X = np.expand_dims(X, axis=-1)   # (1, time, freq, 1)
 
-    # Predict
     preds = model.predict(X, verbose=0)
-    pred_index = np.argmax(preds)
-    pred_label = labels[pred_index]
-    confidence = preds[0][pred_index] * 100
 
-    print("\n🎤 Audio:", audio_path)
-    print("🎯 Emotion:", pred_label)
-    print(f"📊 Confidence: {confidence:.2f}%")
-
-    print("\n🔢 Full probabilities:")
-    for i, label in enumerate(labels):
-        print(f"{label:10s}: {preds[0][i]*100:.2f}%")
+    idx = np.argmax(preds)
+    print("Emotion:", labels[idx])
+    print("Confidence:", float(np.max(preds)) * 100)
