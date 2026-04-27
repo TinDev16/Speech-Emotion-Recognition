@@ -1,7 +1,0 @@
-https://www.kaggle.com/datasets/uldisvalainis/audio-emotions
-https://www.kaggle.com/datasets/dmitrybabko/speech-emotion-recognition-en
-https://www.kaggle.com/datasets/ahmedeabozaid/audio-sentiment-analysis
-
-thiếu 
-calm
-surprise

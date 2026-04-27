@@ -1,53 +1,106 @@
-# Speech Emotion Recognition
+# Speech Emotion Recognition (SER)
 
-## Introduction
-- This repository handles building and training Speech Emotion Recognition System.
-- The basic idea behind this tool is to build and train/test a suited machine learning ( as well as deep learning ) algorithm that could recognize and detects human emotions from speech.
-- This is useful for many industry fields such as making product recommendations, affective computing, etc.
+A professional Speech Emotion Recognition project utilizing a deep learning model that combines convolutional and sequence networks: **CNN2D + BiLSTM + Attention Mechanism**. 
 
-## Requirements
-- **Python 3.6+**
+---
 
-### Python Packages
-- **librosa>=0.10.0**
-- **numpy>=1.23**
-- **scikit-learn>=1.2**
-- **tensorflow>=2.12**
-- **joblib>=1.2**
-- **soundfile>=0.12.1**
-- **h5py>=3.8**
+## Project Description
 
-## Getting Started
+This project is designed to classify core human emotions through audio data (`.wav` files). The system supports recognizing **7 basic emotion labels**:
+- **Angry**
+- **Disgust**
+- **Fear**
+- **Happy**
+- **Neutral**
+- **Sad**
+- **Surprise**
 
-1. Clone the repository:
-```bash
-git clone https://github.com/TinDev16/Speech-Emotion-Recognition
+### Architecture
+The system utilizes one of the most advanced architectures for time-series signals:
+1. **Mel-Spectrogram**: Used as the input audio feature (extracted using `librosa`).
+2. **2D CNN (2D Convolutional Neural Network)**: Extracts spatial features from the Spectrogram.
+3. **BiLSTM (Bidirectional LSTM)**: Learns temporal dependencies from the output of the CNN.
+4. **Attention Mechanism**: Helps the model focus on the time frames that carry the clearest emotional signals.
+
+### Key Techniques
+- **Data Augmentation**: Adding white noise, SpecAugment (Time mask & Freq mask) to increase data diversity and avoid overfitting.
+- **Stratified K-Fold Cross Validation**: Splits the dataset into multiple balanced folds to ensure the most generalized model evaluation.
+- **Class Weighting**: Automatically adjusts weights to improve recognition on imbalanced data.
+
+---
+
+## Directory Structure
+
+```text
+Speech-Emotion-Recognition/
+│
+├── code/
+│   ├── extract_features.py # Script to extract and transform features from audio (Creates X.npy & y.npy)
+│   ├── train.py            # Trains the CNN+BiLSTM+Attention model and saves the best model
+│   └── predict.py          # Script to recognize emotion from any audio file
+│
+├── dataset/                # (To be prepared) Directory containing audio data, organized by emotion folders
+├── ser_best.keras          # Model Weights file (Pre-trained)
+├── labels.npy              # Dictionary file storing emotion labels
+├── f1_scores.png           # F1 Score evaluation chart of the model
+├── ketqua.txt              # Detailed training results
+├── Report.docx             # Project report
+└── README.md               # This project documentation
 ```
 
-2. Install lib
+---
+
+## Requirements & Installation
+
+The project requires **Python 3.8+**. To install the necessary libraries, you can run the following command:
+
 ```bash
-pip install -r requirements.txt
+pip install numpy librosa tensorflow scikit-learn matplotlib seaborn
 ```
 
-3. Run
+---
+
+## Usage Guide
+
+### 1. Feature Extraction
+The `extract_features.py` script will iterate through directories by emotion labels, process padding, apply Data Augmentation, and extract Mel-Spectrogram features into Tensors. You need to adjust `ROOT_PATH` in the code to properly point to your Dataset directory before running.
 ```bash
-python train.py
+python code/extract_features.py
+```
+*Result:* Generates 2 datasets `X.npy` (audio features) and `y.npy` (corresponding labels) in the current directory.
+
+### 2. Training
+Use the `train.py` script to train the model based on the generated `*.npy` files. 
+```bash
+python code/train.py
+```
+*Result:* The model will go through the K-Fold process, print out the Confusion Matrix, and save the best model weights as `ser_best.keras` and labels as `labels.npy`.
+
+### 3. Prediction / Inference
+Use the `predict.py` script and pass the path of a `.wav` test audio file you want to check. 
+```bash
+python code/predict.py path/to/your_test_audio.wav
+```
+*Example Terminal Output:*
+```
+====================
+ Emotion : happy
+ Confidence : 96.85%
+====================
+
+ All emotions:
+angry     : 0.15%
+disgust   : 0.10%
+fear      : 1.00%
+happy     : 96.85%
+neutral   : 0.50%
+sad       : 1.20%
+surprise  : 0.20%
 ```
 
-### Dataset
-This repository used 4 datasets (including this repo's custom dataset) which are downloaded and formatted already in `data` folder:
-- **RAVDESS** : The **R**yson **A**udio-**V**isual **D**atabase of **E**motional **S**peech and **S**ong that contains 24 actors (12 male, 12 female), vocalizing two lexically-matched statements in a neutral North American accent.
-- **TESS**: **T**oronto **E**motional **S**peech **S**et that was modeled on the Northwestern University Auditory Test No. 6 (NU-6; Tillman & Carhart, 1966). A set of 200 target words were spoken in the carrier phrase "Say the word _____' by two actresses (aged 26 and 64 years).
-- **SAVEE**
-- **CREMA**
+---
 
-### Emotions available
-There are 8 emotions available: 
-- 01: Neutral
--	02: Calm
--	03: Happy
--	04: Sad
--	05: Angry
--	06: Fear
--	07: Disgust
--	08: Surprise
+## Evaluation
+Through Stratified K-Fold Cross Validation, the model outputs detailed Precision, Recall, and F1-Score metrics for each label. The system also flexibly applies automatic adjustment mechanisms including lowering the Learning Rate (`ReduceLROnPlateau`) and early stopping (`EarlyStopping`) to prevent overfitting and minimize inefficient training time.
+
+*Implemented as part of a scientific research / academic project.*
