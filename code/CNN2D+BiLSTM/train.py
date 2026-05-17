@@ -1,5 +1,5 @@
 # =====================================================
-# SER FINAL - CNN2D + BiLSTM (No Attention)
+# SER FINAL UPGRADE - CNN2D + BiLSTM + ATTENTION + MIXUP
 # =====================================================
 
 import os
@@ -13,7 +13,6 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
@@ -23,7 +22,7 @@ from tensorflow.keras.layers import *
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
-
+from sklearn.model_selection import train_test_split
 
 # =============================
 # CONFIG
@@ -52,6 +51,12 @@ VALID_EMOTIONS = [
 # =============================
 # GET LABEL
 # =============================
+# merged_ser_dataset/
+# ├── angry/
+# ├── disgust/
+# ├── fear/
+# ...
+
 def get_emotion(path, file):
     emotion = os.path.basename(path).lower()
 
@@ -110,13 +115,8 @@ def extract_features(path, augment=False):
 # =============================
 # LOAD PRE-EXTRACTED FEATURES
 # =============================
-# Ensure these files exist or run extract_features.py first
-try:
-    X = np.load("X.npy")
-    y = np.load("y.npy")
-except:
-    print("X.npy or y.npy not found. Please run extract_features.py first.")
-    exit()
+X = np.load("X.npy")
+y = np.load("y.npy")
 
 print("Data:", X.shape)
 print("Labels:", np.unique(y))
@@ -134,25 +134,37 @@ y_cat = to_categorical(y_enc)
 # MODEL (CNN2D + BiLSTM)
 # =============================
 def build_model(input_shape, n_classes):
+
     inp = Input(shape=input_shape)
 
-    x = Conv2D(32, (3,3), activation='relu')(inp)
+    # CNN BLOCK 1
+    x = Conv2D(32, (3,3), activation='relu', padding='same')(inp)
     x = BatchNormalization()(x)
     x = MaxPooling2D((2,2))(x)
 
-    x = Conv2D(64, (3,3), activation='relu')(x)
+    # CNN BLOCK 2
+    x = Conv2D(64, (3,3), activation='relu', padding='same')(x)
     x = BatchNormalization()(x)
     x = MaxPooling2D((2,2))(x)
 
-    x = Conv2D(128, (3,3), activation='relu')(x)
+    # CNN BLOCK 3
+    x = Conv2D(128, (3,3), activation='relu', padding='same')(x)
     x = BatchNormalization()(x)
     x = MaxPooling2D((2,2))(x)
 
-    x = Reshape((-1, x.shape[-1]))(x)
+    # reshape cho LSTM
+    shape = x.shape
 
-    # Removed return_sequences=True and Attention block
-    x = Bidirectional(LSTM(128, return_sequences=False))(x)
+    x = Reshape(
+        (shape[1] * shape[2], shape[3])
+    )(x)
 
+    # BiLSTM
+    x = Bidirectional(
+        LSTM(128, return_sequences=False)
+    )(x)
+
+    # Dense
     x = Dense(128, activation='relu')(x)
     x = Dropout(0.5)(x)
 
@@ -162,7 +174,9 @@ def build_model(input_shape, n_classes):
 
     model.compile(
         optimizer=Adam(1e-4),
-        loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.1),
+        loss=tf.keras.losses.CategoricalCrossentropy(
+            label_smoothing=0.1
+        ),
         metrics=["accuracy"]
     )
 
@@ -170,51 +184,73 @@ def build_model(input_shape, n_classes):
 
 
 # =============================
-# TRAIN
+# TRAIN 1 TIME ONLY
 # =============================
-kf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=42)
 
-all_preds, all_true = [], []
+X_train, X_val, y_train_enc, y_val_enc = train_test_split(
+    X,
+    y_enc,
+    test_size=0.2,
+    stratify=y_enc,
+    random_state=42
+)
 
-for fold, (tr, val) in enumerate(kf.split(X, y_enc), 1):
-    print(f"\n FOLD {fold}")
+# one-hot
+y_train = to_categorical(y_train_enc)
+y_val = to_categorical(y_val_enc)
 
-    X_train, X_val = X[tr], X[val]
-    y_train, y_val = y_cat[tr], y_cat[val]
+# reshape cho CNN2D
+X_train = X_train[..., np.newaxis]
+X_val = X_val[..., np.newaxis]
 
-    # reshape cho CNN2D
-    X_train = X_train[..., np.newaxis]
-    X_val = X_val[..., np.newaxis]
+# class weight
+cw = compute_class_weight(
+    class_weight="balanced",
+    classes=np.unique(y_train_enc),
+    y=y_train_enc
+)
 
-    # class weight
-    cw = compute_class_weight("balanced",
-                             classes=np.unique(y_enc),
-                             y=y_enc[tr])
-    cw = dict(enumerate(cw))
+cw = dict(enumerate(cw))
 
-    model = build_model(X_train.shape[1:], y_cat.shape[1])
+# build model
+model = build_model(
+    X_train.shape[1:],
+    y_cat.shape[1]
+)
 
-    callbacks = [
-        EarlyStopping(patience=5, restore_best_weights=True),
-        ReduceLROnPlateau(patience=2)
-    ]
+callbacks = [
+    EarlyStopping(
+        patience=5,
+        restore_best_weights=True
+    ),
 
-    model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
-        epochs=40,
-        batch_size=32,
-        callbacks=callbacks,
-        class_weight=cw,
-        verbose=1
+    ReduceLROnPlateau(
+        patience=2
     )
+]
 
-    pred = np.argmax(model.predict(X_val), axis=1)
-    true = np.argmax(y_val, axis=1)
+# train
+model.fit(
+    X_train,
+    y_train,
+    validation_data=(X_val, y_val),
+    epochs=40,
+    batch_size=32,
+    callbacks=callbacks,
+    class_weight=cw,
+    verbose=1
+)
 
-    all_preds.extend(pred)
-    all_true.extend(true)
+# predict
+all_preds = np.argmax(
+    model.predict(X_val),
+    axis=1
+)
 
+all_true = np.argmax(
+    y_val,
+    axis=1
+)
 
 # =============================
 # REPORT
