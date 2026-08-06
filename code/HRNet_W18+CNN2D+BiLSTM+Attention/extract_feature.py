@@ -16,7 +16,12 @@ if not os.path.exists(ROOT_PATH):
     raise FileNotFoundError(f"Dataset folder not found: {ROOT_PATH}. Run the unzip cell first or update ROOT_PATH.")
 
 X, y = [], []
-total_files = 13695
+total_files = 0
+for emotion in os.listdir(ROOT_PATH):
+    emotion_path = os.path.join(ROOT_PATH, emotion)
+    if emotion not in VALID_EMOTIONS:
+        continue
+    total_files += len([f for f in os.listdir(emotion_path) if f.endswith(".wav")])
 
 # =============================
 # AUGMENT
